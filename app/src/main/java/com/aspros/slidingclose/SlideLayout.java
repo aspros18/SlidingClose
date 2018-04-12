@@ -17,15 +17,6 @@ public class SlideLayout extends FrameLayout {
     private Activity mActivity;
     private Scroller mScroller;
 
-    // 次ACTION_MOVE时的X坐标
-    private int mLastMotionX;
-
-    // 屏幕宽度
-    private int mWidth;
-
-    // 可滑动的最小X坐标，小于该坐标的滑动不处理
-    private int mMinX;
-
     // 页面边缘的阴影图
     private Drawable mLeftShadow;
 
@@ -35,8 +26,13 @@ public class SlideLayout extends FrameLayout {
     // 页面边缘阴影的宽度
     private int mShadowWidth;
 
-    // Activity finish标识符
-    private boolean mIsFinish;
+    private int mInterceptDownX;
+    private int mLastInterceptX;
+    private int mLastInterceptY;
+    private int mTouchDownX;
+    private int mLastTouchX;
+    private int mLastTouchY;
+    private boolean isConsumed = false;
 
     public SlideLayout(@NonNull Activity activity) {
         this(activity, null);
@@ -64,39 +60,92 @@ public class SlideLayout extends FrameLayout {
      * 绑定Activity
      */
     public void bindActivity(Activity activity) {
-        ViewGroup decoreView = (ViewGroup) activity.getWindow().getDecorView();
-        View child = decoreView.getChildAt(0);
-        decoreView.removeView(child);
+        mActivity = activity;
+        ViewGroup decorView = (ViewGroup) mActivity.getWindow().getDecorView();
+        View child = decorView.getChildAt(0);
+        decorView.removeView(child);
         addView(child);
-        decoreView.addView(this);
+        decorView.addView(this);
+    }
+
+    @Override
+    public boolean onInterceptTouchEvent(MotionEvent ev) {
+        boolean intercept = false;
+        int x = (int) ev.getX();
+        int y = (int) ev.getY();
+
+        switch (ev.getAction())
+        {
+            case MotionEvent.ACTION_DOWN:
+                intercept = false;
+                mInterceptDownX = x;
+                mLastInterceptX = x;
+                mLastInterceptY = y;
+                break;
+
+            case MotionEvent.ACTION_MOVE:
+                int deltaX = x - mLastInterceptX;
+                int deltaY = y - mLastInterceptY;
+                // 手指处于屏幕边缘，且横向滑动距离大于纵向滑动距离时，拦截事件
+                if (mInterceptDownX < (getWidth() / 10) && Math.abs(deltaX) > Math.abs(deltaY)) {
+                    intercept = true;
+                } else {
+                    intercept = false;
+                }
+                mLastInterceptX = x;
+                mLastInterceptY = y;
+                break;
+
+            case MotionEvent.ACTION_UP:
+                intercept = false;
+                mInterceptDownX = mLastInterceptX = mLastInterceptY = 0;
+                break;
+        }
+
+        return intercept;
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        int x = (int) event.getX();
+        int y = (int) event.getY();
+
         switch (event.getAction()){
             case MotionEvent.ACTION_DOWN:
-                mLastMotionX = (int) event.getX();
-                mWidth = getWidth();
-                mMinX = mWidth / 10;
+                mTouchDownX = x;
+                mLastTouchX = x;
+                mLastTouchY = y;
                 break;
 
             case MotionEvent.ACTION_MOVE:
-                int rightMovedX = mLastMotionX - (int) event.getX();
-                if (getScrollX() + rightMovedX >= 0) {// 左侧即将滑出屏幕
-                    scrollTo(0, 0);
-                } else if ((int) event.getX() > mMinX) {// 手指处于屏幕边缘时不处理滑动
-                    scrollBy(rightMovedX, 0);
+                int deltaX = x - mLastTouchX;
+                int deltaY = y - mLastTouchY;
+
+                if (!isConsumed && mTouchDownX < (getWidth() / 10) && Math.abs(deltaX) > Math.abs(deltaY)) {
+                    isConsumed = true;
                 }
-                mLastMotionX = (int) event.getX();
+
+                if (isConsumed) {
+                    int rightMovedX = mLastTouchX - (int) event.getX();
+                    // 左侧即将滑出屏幕
+                    if (getScrollX() + rightMovedX >= 0) {
+                        scrollTo(0, 0);
+                    } else {
+                        scrollBy(rightMovedX, 0);
+                    }
+                }
+                mLastTouchX = x;
+                mLastTouchY = y;
                 break;
 
             case MotionEvent.ACTION_UP:
-                if (-getScrollX() < mWidth / 2) {
+                isConsumed = false;
+                mTouchDownX = mLastTouchX = mLastTouchY = 0;
+                // 根据手指释放时的位置决定回弹还是关闭
+                if (-getScrollX() < getWidth() / 2) {
                     scrollBack();
-                    mIsFinish = false;
                 } else {
                     scrollClose();
-                    mIsFinish = true;
                 }
                 break;
         }
@@ -120,7 +169,7 @@ public class SlideLayout extends FrameLayout {
      */
     private void scrollClose() {
         int startX = getScrollX();
-        int dx = -getScrollX() - mWidth;
+        int dx = -getScrollX() - getWidth();
         mScroller.startScroll(startX, 0, dx, 0, 300);
         invalidate();
     }
@@ -130,11 +179,9 @@ public class SlideLayout extends FrameLayout {
         if (mScroller.computeScrollOffset()) {
             scrollTo(mScroller.getCurrX(), 0);
             postInvalidate();
-        } else if (mIsFinish) {
+        } else if (-getScrollX() >= getWidth()) {
             mActivity.finish();
         }
-
-        super.computeScroll();
     }
 
     @Override
@@ -147,15 +194,10 @@ public class SlideLayout extends FrameLayout {
      * 绘制边缘的阴影
      */
     private void drawShadow(Canvas canvas) {
-        // 保存画布当前的状态
-        canvas.save();
-        // 设置drawable的大小范围
         mLeftShadow.setBounds(0, 0, mShadowWidth, getHeight());
-        // 让画布平移一定距离
+        canvas.save();
         canvas.translate(-mShadowWidth, 0);
-        // 绘制Drawable
         mLeftShadow.draw(canvas);
-        // 恢复画布的状态
         canvas.restore();
     }
 }
